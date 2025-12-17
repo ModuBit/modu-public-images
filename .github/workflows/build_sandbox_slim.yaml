@@ -1,4 +1,4 @@
-name: Build and Push modu-sandbox-slim to Aliyun CS
+name: modu-sandbox-slim
 
 on:
   workflow_dispatch:
@@ -23,8 +23,8 @@ on:
         type: string
         default: 'Modu Sandbox Slim Image'
 env:
-  REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
-  NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}
+  REGISTRY: ${{ secrets.ALIYUN_CR_REGISTRY }}
+  NAMESPACE: ${{ secrets.ALIYUN_CR_NAMESPACE_MODU }}
   IMAGE_NAME: modu-sandbox-slim
 
 jobs:
@@ -45,8 +45,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.ALIYUN_USERNAME }}
-          password: ${{ secrets.ALIYUN_PASSWORD }}
+          username: ${{ secrets.ALIYUN_CR_USERNAME }}
+          password: ${{ secrets.ALIYUN_CR_PASSWORD }}
 
       - name: Validate inputs
         run: |
