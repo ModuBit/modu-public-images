@@ -53,6 +53,13 @@ jobs:
           PUSH_MODE="${{ github.event.inputs.push_mode }}"
           IMAGE_TAG="${{ github.event.inputs.image_tag }}"
 
+          echo "🔍 Debug info:"
+          echo "- PUSH_MODE: '$PUSH_MODE'"
+          echo "- IMAGE_TAG: '$IMAGE_TAG'"
+          echo "- REGISTRY: '${{ env.REGISTRY }}'"
+          echo "- NAMESPACE: '${{ env.NAMESPACE }}'"
+          echo "- IMAGE_NAME: '${{ env.IMAGE_NAME }}'"
+
           # 验证输入参数
           if [[ "$PUSH_MODE" == "tag_only" || "$PUSH_MODE" == "both" ]]; then
             if [[ -z "$IMAGE_TAG" ]]; then
@@ -81,17 +88,51 @@ jobs:
       - name: Prepare tags
         id: tags
         run: |
+          # 确保环境变量已正确设置
+          if [[ -z "${{ env.REGISTRY }}" || -z "${{ env.NAMESPACE }}" || -z "${{ env.IMAGE_NAME }}" ]]; then
+            echo "❌ Error: Missing required environment variables"
+            echo "REGISTRY: '${{ env.REGISTRY }}'"
+            echo "NAMESPACE: '${{ env.NAMESPACE }}'"
+            echo "IMAGE_NAME: '${{ env.IMAGE_NAME }}'"
+            exit 1
+          fi
+
           # 准备推送的标签
           IFS=',' read -ra TAG_ARRAY <<< "${{ env.PUSH_TAGS }}"
-          TAG_ARGS=""
+
+          echo "📋 Raw PUSH_TAGS: '${{ env.PUSH_TAGS }}'"
+          echo "📋 TAG_ARRAY: ${TAG_ARRAY[*]}"
+
+          # 创建数组存储所有标签
+          declare -a FULL_TAGS
+
           for tag in "${TAG_ARRAY[@]}"; do
-            if [[ -n "$TAG_ARGS" ]]; then
-              TAG_ARGS="$TAG_ARGS,"
+            # 移除可能的空格和前后缀
+            tag=$(echo "$tag" | xargs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+            # 确保标签不以 - 开头
+            if [[ "$tag" == -* ]]; then
+              echo "⚠️ Warning: Tag starts with '-', removing it: '$tag'"
+              tag="${tag#-}"
             fi
-            TAG_ARGS="$TAG_ARGS${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:$tag"
+
+            if [[ -n "$tag" ]]; then
+              FULL_TAG="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:$tag"
+              FULL_TAGS+=("$FULL_TAG")
+              echo "✅ Added tag: $FULL_TAG"
+            fi
           done
+
+          # 用逗号连接所有标签
+          if [[ ${#FULL_TAGS[@]} -gt 0 ]]; then
+            TAG_ARGS=$(IFS=','; echo "${FULL_TAGS[*]}")
+          else
+            echo "❌ Error: No valid tags found"
+            exit 1
+          fi
+
           echo "tags=$TAG_ARGS" >> $GITHUB_OUTPUT
-          echo "📝 Prepared tags: $TAG_ARGS"
+          echo "📝 Final tags: $TAG_ARGS"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
