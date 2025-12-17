@@ -43,11 +43,11 @@ ENV PATH=$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
 
 RUN npm install -g ts-node typescript typescript-language-server
 
+# Create directory for computer use plugin and set ownership
+RUN mkdir -p /usr/local/lib && chown modu:modu /usr/local/lib
+
 # Switch to modu user
 USER modu
-
-# Create directory for computer use plugin
-RUN mkdir -p /usr/local/lib && sudo chown modu:modu /usr/local/lib
 
 # Keep the container running indefinitely
 ENTRYPOINT [ "sleep", "infinity" ]

@@ -25,7 +25,7 @@ on:
 env:
   REGISTRY: ${{ secrets.ALIYUN_CR_REGISTRY }}
   NAMESPACE: ${{ secrets.ALIYUN_CR_NAMESPACE_MODU }}
-  IMAGE_NAME: modu-sandbox-slim
+  IMAGE_NAME: modu-sandbox
 
 jobs:
   build-and-push:
