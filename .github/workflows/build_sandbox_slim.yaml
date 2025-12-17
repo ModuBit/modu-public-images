@@ -110,12 +110,6 @@ jobs:
             # 移除可能的空格和前后缀
             tag=$(echo "$tag" | xargs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
-            # 确保标签不以 - 开头
-            if [[ "$tag" == -* ]]; then
-              echo "⚠️ Warning: Tag starts with '-', removing it: '$tag'"
-              tag="${tag#-}"
-            fi
-
             if [[ -n "$tag" ]]; then
               FULL_TAG="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:$tag"
               FULL_TAGS+=("$FULL_TAG")
@@ -137,8 +131,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./images/sandbox-slim
-          file: ./images/sandbox-slim/Dockerfile
+          context: ./modu-sandbox/modu-sandbox-slim
+          file: ./modu-sandbox/modu-sandbox-slim/Dockerfile
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           labels: |
