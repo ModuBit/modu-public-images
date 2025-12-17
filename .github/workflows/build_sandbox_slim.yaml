@@ -1,0 +1,153 @@
+name: Build and Push modu-sandbox-slim to Aliyun CS
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_mode:
+        description: 'Push mode'
+        required: true
+        type: choice
+        options:
+          - 'tag_only'
+          - 'latest_only'
+          - 'both'
+        default: 'tag_only'
+      image_tag:
+        description: 'Image tag (required for tag_only and both modes)'
+        required: false
+        type: string
+        default: ''
+      description:
+        description: 'Description of the image'
+        required: false
+        type: string
+        default: 'Modu Sandbox Slim Image'
+env:
+  REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+  NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}
+  IMAGE_NAME: modu-sandbox-slim
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Aliyun Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Validate inputs
+        run: |
+          PUSH_MODE="${{ github.event.inputs.push_mode }}"
+          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+
+          # 验证输入参数
+          if [[ "$PUSH_MODE" == "tag_only" || "$PUSH_MODE" == "both" ]]; then
+            if [[ -z "$IMAGE_TAG" ]]; then
+              echo "❌ Error: image_tag is required for $PUSH_MODE mode"
+              exit 1
+            fi
+          fi
+
+          # 设置推送的标签
+          case "$PUSH_MODE" in
+            "tag_only")
+              TAGS="$IMAGE_TAG"
+              ;;
+            "latest_only")
+              TAGS="latest"
+              ;;
+            "both")
+              TAGS="$IMAGE_TAG,latest"
+              ;;
+          esac
+
+          echo "PUSH_TAGS=$TAGS" >> $GITHUB_ENV
+          echo "PUSH_MODE=$PUSH_MODE" >> $GITHUB_ENV
+          echo "✅ Will push with tags: $TAGS"
+
+      - name: Prepare tags
+        id: tags
+        run: |
+          # 准备推送的标签
+          IFS=',' read -ra TAG_ARRAY <<< "${{ env.PUSH_TAGS }}"
+          TAG_ARGS=""
+          for tag in "${TAG_ARRAY[@]}"; do
+            if [[ -n "$TAG_ARGS" ]]; then
+              TAG_ARGS="$TAG_ARGS,"
+            fi
+            TAG_ARGS="$TAG_ARGS${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:$tag"
+          done
+          echo "tags=$TAG_ARGS" >> $GITHUB_OUTPUT
+          echo "📝 Prepared tags: $TAG_ARGS"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./images/sandbox-slim
+          file: ./images/sandbox-slim/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            description=${{ github.event.inputs.description }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+      - name: Build summary
+        run: |
+          echo "## 🚀 Build and Push Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Image Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace:** ${{ env.NAMESPACE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Name:** ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Push Mode:** ${{ env.PUSH_MODE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags Pushed:** ${{ env.PUSH_TAGS }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # 显示所有推送的镜像
+          IFS=',' read -ra TAG_ARRAY <<< "${{ env.PUSH_TAGS }}"
+          echo "### 🏷️ Pushed Images" >> $GITHUB_STEP_SUMMARY
+          for tag in "${TAG_ARRAY[@]}"; do
+            echo "- \`docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:$tag\`" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 🔐 Authentication" >> $GITHUB_STEP_SUMMARY
+          echo "- **Username:** ${{ secrets.ALIYUN_USERNAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 📋 Usage Examples" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          # 根据模式显示不同的使用示例
+          case "${{ env.PUSH_MODE }}" in
+            "tag_only")
+              echo "# Pull specific version" >> $GITHUB_STEP_SUMMARY
+              echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${TAG_ARRAY[0]}" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "latest_only")
+              echo "# Pull latest version" >> $GITHUB_STEP_SUMMARY
+              echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "both")
+              echo "# Pull specific version" >> $GITHUB_STEP_SUMMARY
+              echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${TAG_ARRAY[0]}" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "# Pull latest version" >> $GITHUB_STEP_SUMMARY
+              echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
