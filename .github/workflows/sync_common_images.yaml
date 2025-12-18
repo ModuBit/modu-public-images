@@ -2,11 +2,15 @@ name: sync common images
 
 on:
   workflow_dispatch:
+    inputs:
+      common_images:
+        description: "Images to sync (comma-separated, e.g., node:24.12.0-alpine,python:3.14.2-slim)"
+        required: true
+        type: string
 
 env:
   REGISTRY: ${{ vars.ALIYUN_CR_REGISTRY }}
   NAMESPACE: ${{ vars.ALIYUN_CR_NAMESPACE_MODU }}
-  COMMON_IMAGES: ${{ vars.ALIYUN_CR_COMMON_IMAGES }}
 
 jobs:
   sync-images:
@@ -35,9 +39,9 @@ jobs:
           docker buildx create --name multiarch --driver docker-container --use || true
           docker buildx inspect --bootstrap || true
 
-          IMAGE_LIST="${{ env.COMMON_IMAGES }}"
+          IMAGE_LIST="${{ github.event.inputs.common_images }}"
           if [[ -z "$IMAGE_LIST" ]]; then
-            echo "❌ COMMON_IMAGES is empty"
+            echo "❌ common_images input is empty"
             exit 1
           fi
 
