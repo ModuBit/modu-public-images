@@ -18,8 +18,8 @@ SHELL ["/bin/bash", "-c"]
 # Install pipx and uv
 RUN python3 -m pip install pipx && pipx ensurepath && pipx install uv
 
-# Install Python LSP, daytona and essential pip packages
-RUN python3 -m pip install python-lsp-server daytona matplotlib pandas numpy
+# Install Python essential pip packages
+RUN python3 -m pip install matplotlib pandas numpy
 
 # Create the modu user and configure sudo access
 RUN useradd -m modu && echo "modu ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/91-modu

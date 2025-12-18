@@ -161,8 +161,8 @@ jobs:
           done
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          echo "### 🔐 Authentication" >> $GITHUB_STEP_SUMMARY
-          echo "- **Username:** ${{ secrets.ALIYUN_USERNAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Description" >> $GITHUB_STEP_SUMMARY
+          echo "${{ github.event.inputs.description }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "### 📋 Usage Examples" >> $GITHUB_STEP_SUMMARY
