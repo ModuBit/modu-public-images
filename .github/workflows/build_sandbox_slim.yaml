@@ -4,27 +4,27 @@ on:
   workflow_dispatch:
     inputs:
       push_mode:
-        description: 'Push mode'
+        description: "Push mode"
         required: true
         type: choice
         options:
-          - 'tag_only'
-          - 'latest_only'
-          - 'both'
-        default: 'tag_only'
+          - "tag_only"
+          - "latest_only"
+          - "both"
+        default: "tag_only"
       image_tag:
-        description: 'Image tag (required for tag_only and both modes)'
+        description: "Image tag (required for tag_only and both modes)"
         required: false
         type: string
-        default: ''
+        default: ""
       description:
-        description: 'Description of the image'
+        description: "Description of the image"
         required: false
         type: string
-        default: 'Modu Sandbox Slim Image'
+        default: "Modu Sandbox Slim Image"
 env:
-  REGISTRY: ${{ secrets.ALIYUN_CR_REGISTRY }}
-  NAMESPACE: ${{ secrets.ALIYUN_CR_NAMESPACE_MODU }}
+  REGISTRY: ${{ vars.ALIYUN_CR_REGISTRY }}
+  NAMESPACE: ${{ vars.ALIYUN_CR_NAMESPACE_MODU }}
   IMAGE_NAME: modu-sandbox
 
 jobs:
