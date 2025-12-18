@@ -20,31 +20,19 @@ jobs:
       packages: write
 
     steps:
-      - name: Install regctl (for rate-limited image sync)
+      - name: Install crane
         run: |
-          # 安装 regctl - 支持更好的速率控制
-          curl -sL https://github.com/regclient/regclient/releases/latest/download/regctl-linux-amd64 -o /usr/local/bin/regctl
-          chmod +x /usr/local/bin/regctl
-          regctl version
-
-      - name: Log in to Aliyun Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.ALIYUN_CR_USERNAME }}
-          password: ${{ secrets.ALIYUN_CR_PASSWORD }}
-
-      - name: Configure regctl for Aliyun Registry
+          # 安装 crane - Google 的容器镜像工具，支持 --jobs 参数限制并发
+          VERSION=$(curl -s "https://api.github.com/repos/google/go-containerregistry/releases/latest" | jq -r '.tag_name')
+          curl -sL "https://github.com/google/go-containerregistry/releases/download/${VERSION}/go-containerregistry_Linux_x86_64.tar.gz" | tar -xzf - -C /usr/local/bin crane
+          chmod +x /usr/local/bin/crane
+          crane version
+      
+      - name: Login to registries
         run: |
-          # 配置 regctl 登录阿里云镜像仓库
-          regctl registry login ${{ env.REGISTRY }} \
-            --user "${{ secrets.ALIYUN_CR_USERNAME }}" \
-            --pass "${{ secrets.ALIYUN_CR_PASSWORD }}"
-          
-          # 配置请求限制（全局设置）
-          regctl registry set --req-per-sec 2 ${{ env.REGISTRY }}
-          
-          echo "✅ regctl configured with rate limiting"
+          # 登录阿里云镜像仓库
+          echo "${{ secrets.ALIYUN_CR_PASSWORD }}" | crane auth login ${{ env.REGISTRY }} -u "${{ secrets.ALIYUN_CR_USERNAME }}" --password-stdin
+          echo "✅ Logged in to ${{ env.REGISTRY }}"
 
       - name: Sync images
         id: sync
@@ -86,8 +74,8 @@ jobs:
             echo "  → Target: $target"
             echo "  ⏳ Syncing..."
 
-            # 核心同步：使用 regctl 复制多平台镜像（支持速率限制）
-            # 添加超时保护（10分钟）和进度监控
+            # 核心同步：使用 crane 复制多平台镜像
+            # 添加超时保护（15分钟）和进度监控
             start_time=$(date +%s)
             sync_output=$(mktemp)
             
@@ -101,19 +89,19 @@ jobs:
             ) &
             progress_pid=$!
             
-            # 执行同步命令（使用 regctl，支持速率限制和重试）
-            # --rate-limit: 限制请求速率（每秒请求数:burst大小）
-            # --retry-limit: 自动重试次数
-            # --retry-delay: 重试延迟
+            # 执行同步命令（使用 crane）
+            # --jobs 1: 限制并发为 1，避免触发 429 限流
+            # --platform all: 复制所有平台的镜像（多架构支持）
             sync_success=false
             max_retries=5
             retry_delay=60  # 重试延迟（秒）
             
             for ((retry=1; retry<=max_retries; retry++)); do
-              if timeout 900 regctl image copy \
-                --verbosity info \
-                --rate-limit 2:1 \
-                "$image" "$target" > "$sync_output" 2>&1; then
+              if timeout 900 crane copy \
+                --jobs 1 \
+                --platform all \
+                "${image}" \
+                "${target}" > "$sync_output" 2>&1; then
                 sync_success=true
                 break
               else
