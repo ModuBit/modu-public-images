@@ -22,6 +22,7 @@ jobs:
     steps:
       - name: Install crane
         run: |
+          # aliyun ACR 对 QPS 有限制，使用 docker buildx imagetools create 会触发 429 Too Many Requests
           # 安装 crane - Google 的容器镜像工具，支持 --jobs 参数限制并发
           VERSION=$(curl -s "https://api.github.com/repos/google/go-containerregistry/releases/latest" | jq -r '.tag_name')
           curl -sL "https://github.com/google/go-containerregistry/releases/download/${VERSION}/go-containerregistry_Linux_x86_64.tar.gz" | tar -xzf - -C /usr/local/bin crane
@@ -167,8 +168,11 @@ jobs:
             rm -f "$sync_output"
             
             # 添加延迟避免触发速率限制 (429 Too Many Requests)
-            echo "  💤 Waiting 10s before next image to avoid rate limiting..."
-            sleep 10
+            # 只有多个镜像时才需要等待
+            if [[ ${#IMAGES[@]} -gt 1 ]]; then
+              echo "  💤 Waiting 10s before next image to avoid rate limiting..."
+              sleep 10
+            fi
           done
 
           # 输出到 GitHub 环境变量
