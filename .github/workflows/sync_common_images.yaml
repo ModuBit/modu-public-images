@@ -20,8 +20,12 @@ jobs:
       packages: write
 
     steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Install regctl (for rate-limited image sync)
+        run: |
+          # 安装 regctl - 支持更好的速率控制
+          curl -sL https://github.com/regclient/regclient/releases/latest/download/regctl-linux-amd64 -o /usr/local/bin/regctl
+          chmod +x /usr/local/bin/regctl
+          regctl version
 
       - name: Log in to Aliyun Container Registry
         uses: docker/login-action@v3
@@ -30,14 +34,22 @@ jobs:
           username: ${{ secrets.ALIYUN_CR_USERNAME }}
           password: ${{ secrets.ALIYUN_CR_PASSWORD }}
 
+      - name: Configure regctl for Aliyun Registry
+        run: |
+          # 配置 regctl 登录阿里云镜像仓库
+          regctl registry login ${{ env.REGISTRY }} \
+            --user "${{ secrets.ALIYUN_CR_USERNAME }}" \
+            --pass "${{ secrets.ALIYUN_CR_PASSWORD }}"
+          
+          # 配置请求限制（全局设置）
+          regctl registry set --req-per-sec 2 ${{ env.REGISTRY }}
+          
+          echo "✅ regctl configured with rate limiting"
+
       - name: Sync images
         id: sync
         run: |
           set +e  # 不因单个命令失败而退出，我们需要收集所有结果
-          
-          # 初始化 buildx
-          docker buildx create --name multiarch --driver docker-container --use || true
-          docker buildx inspect --bootstrap || true
 
           IMAGE_LIST="${{ github.event.inputs.common_images }}"
           if [[ -z "$IMAGE_LIST" ]]; then
@@ -74,7 +86,7 @@ jobs:
             echo "  → Target: $target"
             echo "  ⏳ Syncing..."
 
-            # 核心同步：使用 imagetools 直接复制多平台 manifest
+            # 核心同步：使用 regctl 复制多平台镜像（支持速率限制）
             # 添加超时保护（10分钟）和进度监控
             start_time=$(date +%s)
             sync_output=$(mktemp)
@@ -89,17 +101,36 @@ jobs:
             ) &
             progress_pid=$!
             
-            # 执行同步命令
-            # 注意：不使用 stdbuf，因为它可能在某些系统上不可用
-            # 直接使用 timeout 和重定向
+            # 执行同步命令（使用 regctl，支持速率限制和重试）
+            # --rate-limit: 限制请求速率（每秒请求数:burst大小）
+            # --retry-limit: 自动重试次数
+            # --retry-delay: 重试延迟
             sync_success=false
-            if timeout 600 docker buildx imagetools create \
-              --tag "$target" \
-              "$image" > "$sync_output" 2>&1; then
-              sync_success=true
-            else
-              sync_exit_code=$?
-            fi
+            max_retries=5
+            retry_delay=60  # 重试延迟（秒）
+            
+            for ((retry=1; retry<=max_retries; retry++)); do
+              if timeout 900 regctl image copy \
+                --verbosity info \
+                --rate-limit 2:1 \
+                "$image" "$target" > "$sync_output" 2>&1; then
+                sync_success=true
+                break
+              else
+                sync_exit_code=$?
+                # 检查是否是 429 限流错误
+                if grep -qiE "(429|too many|rate limit)" "$sync_output" 2>/dev/null; then
+                  if [[ $retry -lt $max_retries ]]; then
+                    current_delay=$((retry_delay * retry))  # 指数退避
+                    echo "  ⚠️  Rate limited, waiting ${current_delay}s before retry $((retry+1))/${max_retries}..."
+                    sleep $current_delay
+                    continue
+                  fi
+                fi
+                # 非限流错误或已用尽重试次数，退出循环
+                break
+              fi
+            done
             
             # 停止进度监控（无论成功或失败）
             kill $progress_pid 2>/dev/null || true
@@ -146,6 +177,10 @@ jobs:
             
             # 清理临时文件
             rm -f "$sync_output"
+            
+            # 添加延迟避免触发速率限制 (429 Too Many Requests)
+            echo "  💤 Waiting 10s before next image to avoid rate limiting..."
+            sleep 10
           done
 
           # 输出到 GitHub 环境变量
