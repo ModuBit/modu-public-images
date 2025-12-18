@@ -1,31 +1,31 @@
-name: Build and Push modu-sandbox-slim to Aliyun CS
+name: modu-sandbox-slim
 
 on:
   workflow_dispatch:
     inputs:
       push_mode:
-        description: 'Push mode'
+        description: "Push mode"
         required: true
         type: choice
         options:
-          - 'tag_only'
-          - 'latest_only'
-          - 'both'
-        default: 'tag_only'
+          - "tag_only"
+          - "latest_only"
+          - "both"
+        default: "tag_only"
       image_tag:
-        description: 'Image tag (required for tag_only and both modes)'
+        description: "Image tag (required for tag_only and both modes)"
         required: false
         type: string
-        default: ''
+        default: ""
       description:
-        description: 'Description of the image'
+        description: "Description of the image"
         required: false
         type: string
-        default: 'Modu Sandbox Slim Image'
+        default: "Modu Sandbox Slim Image"
 env:
-  REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
-  NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}
-  IMAGE_NAME: modu-sandbox-slim
+  REGISTRY: ${{ vars.ALIYUN_CR_REGISTRY }}
+  NAMESPACE: ${{ vars.ALIYUN_CR_NAMESPACE_MODU }}
+  IMAGE_NAME: modu-sandbox
 
 jobs:
   build-and-push:
@@ -45,13 +45,20 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.ALIYUN_USERNAME }}
-          password: ${{ secrets.ALIYUN_PASSWORD }}
+          username: ${{ secrets.ALIYUN_CR_USERNAME }}
+          password: ${{ secrets.ALIYUN_CR_PASSWORD }}
 
       - name: Validate inputs
         run: |
           PUSH_MODE="${{ github.event.inputs.push_mode }}"
           IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+
+          echo "🔍 Debug info:"
+          echo "- PUSH_MODE: '$PUSH_MODE'"
+          echo "- IMAGE_TAG: '$IMAGE_TAG'"
+          echo "- REGISTRY: '${{ env.REGISTRY }}'"
+          echo "- NAMESPACE: '${{ env.NAMESPACE }}'"
+          echo "- IMAGE_NAME: '${{ env.IMAGE_NAME }}'"
 
           # 验证输入参数
           if [[ "$PUSH_MODE" == "tag_only" || "$PUSH_MODE" == "both" ]]; then
@@ -81,23 +88,51 @@ jobs:
       - name: Prepare tags
         id: tags
         run: |
+          # 确保环境变量已正确设置
+          if [[ -z "${{ env.REGISTRY }}" || -z "${{ env.NAMESPACE }}" || -z "${{ env.IMAGE_NAME }}" ]]; then
+            echo "❌ Error: Missing required environment variables"
+            echo "REGISTRY: '${{ env.REGISTRY }}'"
+            echo "NAMESPACE: '${{ env.NAMESPACE }}'"
+            echo "IMAGE_NAME: '${{ env.IMAGE_NAME }}'"
+            exit 1
+          fi
+
           # 准备推送的标签
           IFS=',' read -ra TAG_ARRAY <<< "${{ env.PUSH_TAGS }}"
-          TAG_ARGS=""
+
+          echo "📋 Raw PUSH_TAGS: '${{ env.PUSH_TAGS }}'"
+          echo "📋 TAG_ARRAY: ${TAG_ARRAY[*]}"
+
+          # 创建数组存储所有标签
+          declare -a FULL_TAGS
+
           for tag in "${TAG_ARRAY[@]}"; do
-            if [[ -n "$TAG_ARGS" ]]; then
-              TAG_ARGS="$TAG_ARGS,"
+            # 移除可能的空格和前后缀
+            tag=$(echo "$tag" | xargs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+            if [[ -n "$tag" ]]; then
+              FULL_TAG="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:$tag"
+              FULL_TAGS+=("$FULL_TAG")
+              echo "✅ Added tag: $FULL_TAG"
             fi
-            TAG_ARGS="$TAG_ARGS${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:$tag"
           done
+
+          # 用逗号连接所有标签
+          if [[ ${#FULL_TAGS[@]} -gt 0 ]]; then
+            TAG_ARGS=$(IFS=','; echo "${FULL_TAGS[*]}")
+          else
+            echo "❌ Error: No valid tags found"
+            exit 1
+          fi
+
           echo "tags=$TAG_ARGS" >> $GITHUB_OUTPUT
-          echo "📝 Prepared tags: $TAG_ARGS"
+          echo "📝 Final tags: $TAG_ARGS"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./images/sandbox-slim
-          file: ./images/sandbox-slim/Dockerfile
+          context: ./modu-sandbox/modu-sandbox-slim
+          file: ./modu-sandbox/modu-sandbox-slim/Dockerfile
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           labels: |
@@ -126,8 +161,8 @@ jobs:
           done
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          echo "### 🔐 Authentication" >> $GITHUB_STEP_SUMMARY
-          echo "- **Username:** ${{ secrets.ALIYUN_USERNAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Description" >> $GITHUB_STEP_SUMMARY
+          echo "${{ github.event.inputs.description }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "### 📋 Usage Examples" >> $GITHUB_STEP_SUMMARY

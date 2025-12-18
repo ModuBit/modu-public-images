@@ -18,8 +18,8 @@ SHELL ["/bin/bash", "-c"]
 # Install pipx and uv
 RUN python3 -m pip install pipx && pipx ensurepath && pipx install uv
 
-# Install Python LSP, daytona and essential pip packages
-RUN python3 -m pip install python-lsp-server daytona matplotlib pandas numpy
+# Install Python essential pip packages
+RUN python3 -m pip install matplotlib pandas numpy
 
 # Create the modu user and configure sudo access
 RUN useradd -m modu && echo "modu ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/91-modu
@@ -43,11 +43,11 @@ ENV PATH=$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
 
 RUN npm install -g ts-node typescript typescript-language-server
 
+# Create directory for computer use plugin and set ownership
+RUN mkdir -p /usr/local/lib && chown modu:modu /usr/local/lib
+
 # Switch to modu user
 USER modu
-
-# Create directory for computer use plugin
-RUN mkdir -p /usr/local/lib && sudo chown modu:modu /usr/local/lib
 
 # Keep the container running indefinitely
 ENTRYPOINT [ "sleep", "infinity" ]
