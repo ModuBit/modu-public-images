@@ -1,0 +1,266 @@
+name: Sync Common Images
+
+on:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ${{ vars.ALIYUN_CR_REGISTRY }}
+  NAMESPACE: ${{ vars.ALIYUN_CR_NAMESPACE_MODU }}
+  COMMON_IMAGES: ${{ vars.ALIYUN_CR_COMMON_IMAGES }}
+
+jobs:
+  sync-images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Aliyun Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.ALIYUN_CR_USERNAME }}
+          password: ${{ secrets.ALIYUN_CR_PASSWORD }}
+
+      - name: Parse and validate image list
+        run: |
+          IMAGE_LIST="${{ env.COMMON_IMAGES }}"
+
+          echo "🔍 Debug info:"
+          echo "- IMAGE_LIST: '$IMAGE_LIST'"
+          echo "- REGISTRY: '${{ env.REGISTRY }}'"
+          echo "- NAMESPACE: '${{ env.NAMESPACE }}'"
+
+          if [[ -z "$IMAGE_LIST" ]]; then
+            echo "❌ Error: COMMON_IMAGES environment variable is not set or empty"
+            exit 1
+          fi
+
+          # 解析镜像列表并存储到数组
+          IFS=',' read -ra IMAGE_ARRAY <<< "$IMAGE_LIST"
+
+          echo "📋 Raw images: ${IMAGE_ARRAY[*]}"
+
+          # 创建数组存储有效镜像
+          declare -a VALID_IMAGES
+
+          for image in "${IMAGE_ARRAY[@]}"; do
+            # 移除空格
+            image=$(echo "$image" | xargs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+            if [[ -n "$image" ]]; then
+              # 检查镜像是否包含标签
+              if [[ "$image" == *":"* ]]; then
+                VALID_IMAGES+=("$image")
+                echo "✅ Added image: $image"
+              else
+                # 如果没有标签，自动添加 :latest
+                image_with_tag="${image}:latest"
+                VALID_IMAGES+=("$image_with_tag")
+                echo "✅ Added image: $image_with_tag (auto-added :latest tag)"
+              fi
+            fi
+          done
+
+          if [[ ${#VALID_IMAGES[@]} -eq 0 ]]; then
+            echo "❌ Error: No valid images found"
+            exit 1
+          fi
+
+          # 将镜像列表写入环境变量文件
+          printf "%s\n" "${VALID_IMAGES[@]}" > /tmp/images.txt
+          echo "Found ${#VALID_IMAGES[@]} valid images"
+
+          # 设置环境变量
+          echo "IMAGE_COUNT=${#VALID_IMAGES[@]}" >> $GITHUB_ENV
+
+      - name: Pull and push images
+        run: |
+          # 启用 Docker Buildx 多平台构建
+          docker buildx create --name multiarch --driver docker-container --use
+          docker buildx inspect --bootstrap
+
+          echo "🚀 Starting image synchronization..."
+
+          # 创建文件记录成功和失败的镜像
+          echo "# Successfully synchronized images" > /tmp/success_images.txt
+          echo "# Failed to synchronize images" > /tmp/failed_images.txt
+
+          success_count=0
+          failed_count=0
+
+          while IFS= read -r original_image; do
+            if [[ -n "$original_image" ]]; then
+              echo ""
+              echo "📦 Processing: $original_image"
+
+              # 处理镜像名称：将 namespace 替换为连字符
+              # 例如：daytonaio/daytona-api:latest -> daytonaio-daytona-api:latest
+              if [[ "$original_image" == *"/"* ]]; then
+                # 移除 registry 部分（如果存在）
+                if [[ "$original_image" == *"."*"/"* ]]; then
+                  # 格式如：registry.com/namespace/image:tag
+                  image_without_registry=$(echo "$original_image" | cut -d'/' -f2-)
+                else
+                  # 格式如：namespace/image:tag
+                  image_without_registry="$original_image"
+                fi
+
+                # 将斜杠替换为连字符
+                transformed_name=$(echo "$image_without_registry" | sed 's/\//-/g')
+              else
+                # 简单格式如：redis:latest
+                transformed_name="$original_image"
+              fi
+
+              target_image="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/$transformed_name"
+
+              echo "  Original: $original_image"
+              echo "  Target:   $target_image"
+
+              sync_success=true
+              error_message=""
+
+              # 拉取镜像（支持多平台）
+              echo "  🔽 Pulling image for amd64 and arm64..."
+              if ! docker buildx imagetools inspect "$original_image" > /dev/null 2>&1; then
+                sync_success=false
+                error_message="Image does not exist or is not accessible"
+                echo "  ❌ Error: $error_message"
+              else
+                # 使用 docker pull 拉取镜像
+                if ! docker pull --platform linux/amd64,linux/arm64 "$original_image"; then
+                  echo "  ❌ Error: Failed to pull $original_image for all platforms"
+                  echo "  🔄 Trying to pull for default platform..."
+                  if ! docker pull "$original_image"; then
+                    sync_success=false
+                    error_message="Failed to pull image"
+                    echo "  ❌ Error: $error_message"
+                  fi
+                fi
+
+                if [[ "$sync_success" == true ]]; then
+                  # 标记镜像
+                  echo "  🏷️ Tagging image..."
+                  if ! docker tag "$original_image" "$target_image"; then
+                    sync_success=false
+                    error_message="Failed to tag image"
+                    echo "  ❌ Error: $error_message"
+                  else
+                    # 推送镜像
+                    echo "  🔼 Pushing image..."
+                    if ! docker push "$target_image"; then
+                      sync_success=false
+                      error_message="Failed to push image"
+                      echo "  ❌ Error: $error_message"
+                    fi
+                  fi
+                fi
+              fi
+
+              # 记录结果
+              if [[ "$sync_success" == true ]]; then
+                echo "✅ $original_image -> $target_image" >> /tmp/success_images.txt
+                echo "  ✅ Successfully synced: $target_image"
+                ((success_count++))
+              else
+                echo "❌ $original_image - $error_message" >> /tmp/failed_images.txt
+                echo "  ❌ Failed to sync: $error_message"
+                ((failed_count++))
+              fi
+
+              # 清理本地镜像以节省空间
+              docker rmi "$original_image" "$target_image" 2>/dev/null || true
+            fi
+          done < /tmp/images.txt
+
+          # 更新统计信息到环境变量
+          echo "SUCCESS_COUNT=$success_count" >> $GITHUB_ENV
+          echo "FAILED_COUNT=$failed_count" >> $GITHUB_ENV
+
+      - name: Sync summary
+        run: |
+          echo "## 🚀 Image Sync Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Sync Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Images:** ${{ env.IMAGE_COUNT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **✅ Successful:** ${{ env.SUCCESS_COUNT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **❌ Failed:** ${{ env.FAILED_COUNT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace:** ${{ env.NAMESPACE }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # 显示成功的镜像
+          if [[ ${{ env.SUCCESS_COUNT }} -gt 0 ]]; then
+            echo "### ✅ Successfully Synchronized Images (${{ env.SUCCESS_COUNT }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            while IFS= read -r line; do
+              # 跳过注释行
+              if [[ "$line" == "#"* ]]; then
+                continue
+              fi
+              if [[ -n "$line" ]]; then
+                # 解析格式: ✅ original_image -> target_image
+                original_image=$(echo "$line" | sed 's/✅ \(.*\) -> .*/\1/')
+                target_image=$(echo "$line" | sed 's/.* -> \(.*\)/\1/')
+                echo "- **$original_image**" >> $GITHUB_STEP_SUMMARY
+                echo "  → \`$target_image\`" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < /tmp/success_images.txt
+          fi
+
+          # 显示失败的镜像
+          if [[ ${{ env.FAILED_COUNT }} -gt 0 ]]; then
+            echo "### ❌ Failed Synchronized Images (${{ env.FAILED_COUNT }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            while IFS= read -r line; do
+              # 跳过注释行
+              if [[ "$line" == "#"* ]]; then
+                continue
+              fi
+              if [[ -n "$line" ]]; then
+                # 解析格式: ❌ original_image - error_message
+                original_image=$(echo "$line" | sed 's/❌ \(.*\) - .*/\1/')
+                error_message=$(echo "$line" | sed 's/.* - \(.*\)/\1/')
+                echo "- **$original_image**" >> $GITHUB_STEP_SUMMARY
+                echo "  ⚠️ $error_message" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < /tmp/failed_images.txt
+          fi
+
+          # 显示使用示例（仅显示成功的镜像）
+          if [[ ${{ env.SUCCESS_COUNT }} -gt 0 ]]; then
+            echo "### 📝 Usage Examples" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "# Pull successfully synced images" >> $GITHUB_STEP_SUMMARY
+            while IFS= read -r line; do
+              # 跳过注释行
+              if [[ "$line" == "#"* ]]; then
+                continue
+              fi
+              if [[ -n "$line" ]]; then
+                target_image=$(echo "$line" | sed 's/.* -> \(.*\)/\1/')
+                echo "docker pull $target_image" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < /tmp/success_images.txt
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # 如果有失败的镜像，添加故障排除提示
+          if [[ ${{ env.FAILED_COUNT }} -gt 0 ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔧 Troubleshooting Tips" >> $GITHUB_STEP_SUMMARY
+            echo "- Check if the source images exist and are accessible" >> $GITHUB_STEP_SUMMARY
+            echo "- Verify network connectivity to Docker Hub or other registries" >> $GITHUB_STEP_SUMMARY
+            echo "- Check if you have sufficient permissions to push to the target registry" >> $GITHUB_STEP_SUMMARY
+            echo "- Review the workflow logs for detailed error messages" >> $GITHUB_STEP_SUMMARY
+          fi
