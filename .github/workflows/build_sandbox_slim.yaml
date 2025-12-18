@@ -1,4 +1,4 @@
-name: modu-sandbox-slim
+name: build modu-sandbox-slim
 
 on:
   workflow_dispatch:
@@ -22,6 +22,7 @@ on:
         required: false
         type: string
         default: "Modu Sandbox Slim Image"
+
 env:
   REGISTRY: ${{ vars.ALIYUN_CR_REGISTRY }}
   NAMESPACE: ${{ vars.ALIYUN_CR_NAMESPACE_MODU }}
@@ -48,85 +49,28 @@ jobs:
           username: ${{ secrets.ALIYUN_CR_USERNAME }}
           password: ${{ secrets.ALIYUN_CR_PASSWORD }}
 
-      - name: Validate inputs
+      - name: Prepare tags
+        id: prep
         run: |
           PUSH_MODE="${{ github.event.inputs.push_mode }}"
           IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          BASE="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"
 
-          echo "🔍 Debug info:"
-          echo "- PUSH_MODE: '$PUSH_MODE'"
-          echo "- IMAGE_TAG: '$IMAGE_TAG'"
-          echo "- REGISTRY: '${{ env.REGISTRY }}'"
-          echo "- NAMESPACE: '${{ env.NAMESPACE }}'"
-          echo "- IMAGE_NAME: '${{ env.IMAGE_NAME }}'"
-
-          # 验证输入参数
-          if [[ "$PUSH_MODE" == "tag_only" || "$PUSH_MODE" == "both" ]]; then
-            if [[ -z "$IMAGE_TAG" ]]; then
-              echo "❌ Error: image_tag is required for $PUSH_MODE mode"
-              exit 1
-            fi
+          # 验证：tag_only 和 both 模式必须提供 tag
+          if [[ "$PUSH_MODE" != "latest_only" && -z "$IMAGE_TAG" ]]; then
+            echo "❌ Error: image_tag is required for $PUSH_MODE mode"
+            exit 1
           fi
 
-          # 设置推送的标签
+          # 生成 tags
           case "$PUSH_MODE" in
-            "tag_only")
-              TAGS="$IMAGE_TAG"
-              ;;
-            "latest_only")
-              TAGS="latest"
-              ;;
-            "both")
-              TAGS="$IMAGE_TAG,latest"
-              ;;
+            "tag_only")     TAGS="${BASE}:${IMAGE_TAG}" ;;
+            "latest_only")  TAGS="${BASE}:latest" ;;
+            "both")         TAGS="${BASE}:${IMAGE_TAG},${BASE}:latest" ;;
           esac
 
-          echo "PUSH_TAGS=$TAGS" >> $GITHUB_ENV
-          echo "PUSH_MODE=$PUSH_MODE" >> $GITHUB_ENV
-          echo "✅ Will push with tags: $TAGS"
-
-      - name: Prepare tags
-        id: tags
-        run: |
-          # 确保环境变量已正确设置
-          if [[ -z "${{ env.REGISTRY }}" || -z "${{ env.NAMESPACE }}" || -z "${{ env.IMAGE_NAME }}" ]]; then
-            echo "❌ Error: Missing required environment variables"
-            echo "REGISTRY: '${{ env.REGISTRY }}'"
-            echo "NAMESPACE: '${{ env.NAMESPACE }}'"
-            echo "IMAGE_NAME: '${{ env.IMAGE_NAME }}'"
-            exit 1
-          fi
-
-          # 准备推送的标签
-          IFS=',' read -ra TAG_ARRAY <<< "${{ env.PUSH_TAGS }}"
-
-          echo "📋 Raw PUSH_TAGS: '${{ env.PUSH_TAGS }}'"
-          echo "📋 TAG_ARRAY: ${TAG_ARRAY[*]}"
-
-          # 创建数组存储所有标签
-          declare -a FULL_TAGS
-
-          for tag in "${TAG_ARRAY[@]}"; do
-            # 移除可能的空格和前后缀
-            tag=$(echo "$tag" | xargs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
-            if [[ -n "$tag" ]]; then
-              FULL_TAG="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:$tag"
-              FULL_TAGS+=("$FULL_TAG")
-              echo "✅ Added tag: $FULL_TAG"
-            fi
-          done
-
-          # 用逗号连接所有标签
-          if [[ ${#FULL_TAGS[@]} -gt 0 ]]; then
-            TAG_ARGS=$(IFS=','; echo "${FULL_TAGS[*]}")
-          else
-            echo "❌ Error: No valid tags found"
-            exit 1
-          fi
-
-          echo "tags=$TAG_ARGS" >> $GITHUB_OUTPUT
-          echo "📝 Final tags: $TAG_ARGS"
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+          echo "📦 Tags: $TAGS"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -134,55 +78,29 @@ jobs:
           context: ./modu-sandbox/modu-sandbox-slim
           file: ./modu-sandbox/modu-sandbox-slim/Dockerfile
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: ${{ steps.prep.outputs.tags }}
           labels: |
             description=${{ github.event.inputs.description }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
 
-      - name: Build summary
+      - name: Summary
         run: |
-          echo "## 🚀 Build and Push Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Image Information" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Namespace:** ${{ env.NAMESPACE }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image Name:** ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Push Mode:** ${{ env.PUSH_MODE }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tags Pushed:** ${{ env.PUSH_TAGS }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🚀 Build Complete
 
-          # 显示所有推送的镜像
-          IFS=',' read -ra TAG_ARRAY <<< "${{ env.PUSH_TAGS }}"
-          echo "### 🏷️ Pushed Images" >> $GITHUB_STEP_SUMMARY
-          for tag in "${TAG_ARRAY[@]}"; do
-            echo "- \`docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:$tag\`" >> $GITHUB_STEP_SUMMARY
-          done
-          echo "" >> $GITHUB_STEP_SUMMARY
+          | Item | Value |
+          |------|-------|
+          | Image | \`${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}\` |
+          | Mode | ${{ github.event.inputs.push_mode }} |
+          | Platforms | linux/amd64, linux/arm64 |
 
-          echo "### 📝 Description" >> $GITHUB_STEP_SUMMARY
-          echo "${{ github.event.inputs.description }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          ### 🏷️ Tags
+          \`\`\`
+          ${{ steps.prep.outputs.tags }}
+          \`\`\`
 
-          echo "### 📋 Usage Examples" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          # 根据模式显示不同的使用示例
-          case "${{ env.PUSH_MODE }}" in
-            "tag_only")
-              echo "# Pull specific version" >> $GITHUB_STEP_SUMMARY
-              echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${TAG_ARRAY[0]}" >> $GITHUB_STEP_SUMMARY
-              ;;
-            "latest_only")
-              echo "# Pull latest version" >> $GITHUB_STEP_SUMMARY
-              echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-              ;;
-            "both")
-              echo "# Pull specific version" >> $GITHUB_STEP_SUMMARY
-              echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${TAG_ARRAY[0]}" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "# Pull latest version" >> $GITHUB_STEP_SUMMARY
-              echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-              ;;
-          esac
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ### 📝 Description
+          ${{ github.event.inputs.description }}
+          EOF
